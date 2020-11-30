@@ -1,0 +1,629 @@
+---
+title: "Type D Data Wrangle"
+author: "Water Department - County of Inyo"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+ html_document:
+    df_print: paged
+    code_folding: hide
+    fig_caption: yes
+    toc: yes
+    toc_depth: 5
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+[Github Repo](https://github.com/zach-nelson/riparian)
+
+
+```{r setup,warning=FALSE,message=FALSE, echo=TRUE}
+
+library(knitr) #how R code and text turn into interactive word, pdf, or html-based documents
+library(googlesheets4) # 
+library(googledrive)
+library(tidyverse) #dplyr, tidyr etc
+# library(DT)#html widget for data tables [searchable, sortable, with pagitation and set record number per page and filter by categories]
+
+# library(knitr) #how R code and text turn into interactive word, pdf, or html-based documents
+# library(googledrive)
+library(gargle)
+library(janitor)
+library(stringr)#dplyr, tidyr etc
+
+library(rmarkdown)
+
+# spatial
+library(sp)
+library(rgdal)
+library(sf)
+library(tmaptools)
+library(tmap)
+library("RColorBrewer")
+
+gs4_deauth() 
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE, cache=TRUE)
+```
+
+# Read Data
+
+Google sheets API is used to pull the most recent data
+
+```{r}
+# set to deauthorize for now. meaning the data set is temporarily set to public view with link. This way we don't have to worry about authenticating google account.
+
+gs4_deauth()
+
+# this is the url of the sheet copied from browser
+gsheet.url <- "https://docs.google.com/spreadsheets/d/1hytlt3tk_mq-nEeVIHuYIC16CVfONP-x0XYLJRMI5jg/edit?usp=sharing"
+
+# get metadata from sheet
+gs4_get(gsheet.url)
+
+```
+
+```{r}
+# store the sheet id for future reference. May be more stable than the url and is nicer to look at.
+ssid <- "1hytlt3tk_mq-nEeVIHuYIC16CVfONP-x0XYLJRMI5jg"
+```
+
+sheet properties
+```{r}
+# this function declares the string to be a Sheet ID in case we mix the workflow with googledrive library of functions which assume character sting is a file name or path.
+
+ssid <- as_sheets_id("1hytlt3tk_mq-nEeVIHuYIC16CVfONP-x0XYLJRMI5jg")
+sheet_properties(ssid)
+```
+
+worksheet names
+```{r}
+sheet_names(ssid)
+```
+
+## Line Point Data
+count data - species recorded in each of 3-tiers every meter. Transect length variable
+```{r}
+
+lpi <- read_sheet(ssid) %>% clean_names() 
+paged_table(lpi)
+```
+
+## Belt Transect Individual Tree Data
+
+Includes individual tree rows with dbh, height etc
+
+```{r}
+# Clean up the names automatically
+belt.count <- read_sheet(ssid, sheet = "belt-tree-count")%>% clean_names() 
+paged_table(belt.count)
+```
+
+
+## Spherical Densiometer  - Overhead Canopy Cover
+
+Canopy cover from spherical densiometer, 4 directions every 10 m
+
+```{r}
+# gs4_deauth() 
+s.dens <- read_sheet(ssid, sheet = "Spherical Densiometer ") %>% clean_names()
+paged_table(s.dens)
+```
+
+## Fluvial Surface
+
+```{r}
+#  "lpi-3 tier"             "belt-tree-count"        "Spherical Densiometer "
+#  [4] "fluvial surface"        "soil"                   "TreeCoreTally"         
+#  [7] "SWE"                    "completed transects"    "dropdown lists"        
+# [10] "Pivot Table 1"  
+fluv.surf <- read_sheet(ssid, sheet = "fluvial surface")%>% clean_names()
+paged_table(fluv.surf)
+```
+
+notes
+data types imported fine. I haven't done anything with this yet (11/9/20 zn)
+
+## Soil
+```{r}
+#  "lpi-3 tier"             "belt-tree-count"        "Spherical Densiometer "
+#  [4] "fluvial surface"        "soil"                   "TreeCoreTally"         
+#  [7] "SWE"                    "completed transects"    "dropdown lists"        
+# [10] "Pivot Table 1"  
+soil <- read_sheet(ssid, sheet = "soil")%>% clean_names()
+paged_table(soil) 
+```
+
+
+data types imported fine. I haven't done anything with this yet (11/9/20 zn)
+
+## Tree Core Tally
+```{r}
+#  "lpi-3 tier"             "belt-tree-count"        "Spherical Densiometer "
+#  [4] "fluvial surface"        "soil"                   "TreeCoreTally"         
+#  [7] "SWE"                    "completed transects"    "dropdown lists"        
+# [10] "Pivot Table 1"  
+tct <- read_sheet(ssid, sheet = "TreeCoreTally")%>% clean_names()
+paged_table(tct)
+```
+
+todo extract tran id from tree number species column
+todo some data type issues e.g. number_samples as list column. 
+
+
+## Surface Water Elevation
+
+```{r}
+#  [7] "SWE"                    "completed transects"    "dropdown lists"        
+# [10] "Pivot Table 1"  
+swe <- read_sheet(ssid, sheet = "SWE")%>% clean_names()
+paged_table(swe)
+```
+
+
+todo fix notes column - change from list to character. some other columns too e.g. logical to int/char?
+
+
+## Species Attributes
+```{r}
+# read species list from google drive
+# species.url <- "https://docs.google.com/spreadsheets/d/1-OZyPUSEqJNkxEANBOabkH6F6ydcOL67h604LmSE8m8/edit?usp=sharing"
+# gs4_deauth()
+# get metadata from sheet
+# gs4_get(species.url)
+spid <- as_sheets_id("1-OZyPUSEqJNkxEANBOabkH6F6ydcOL67h604LmSE8m8")
+
+species <- read_sheet(spid)%>% clean_names()
+
+```
+
+# Summary
+
+## LPI 3-tier
+
+filter rows, select columns and rename tiers
+
+```{r}
+# %>% filter(str_detect(filter_id, "BGP"))
+l <- lpi  %>% select(filter_id:bare_soil)%>% rename(xbottom = x1_5_m_code, xmiddle = x1_5_5_m_code, xtop = x5_m_code)
+
+
+paged_table(l)
+```
+
+Tidy data columns as variables and rows as observations
+
+```{r}
+# tidy the three value columns for three heights, use gather
+ll <- l %>% pivot_longer(cols = starts_with("x"), 
+                     names_to = "tier", 
+                     values_to = "species"
+                     ) %>% mutate(
+                       hits = case_when(!is.na(species) ~ 1,
+                                        is.na(species) ~ 0))
+```
+
+create ordinal variable for tiers - for visualization
+
+bottom is 1
+middle is 2
+top is 3
+
+```{r}
+ll.ord <- ll  %>% mutate(ord.tier = case_when(tier == 'xbottom' ~ as.numeric(1),
+                                          tier == 'xmiddle' ~ as.numeric(2),
+                                          tier == 'xtop' ~ as.numeric(3)))
+```
+
+Join species codes to species characteristics/classifications
+
+
+```{r}
+sp2 <- species %>% select(code, species, common_name, veg_type, lifeform, lifecycle)
+
+
+ll.sp <- ll.ord %>% left_join(sp2, by = c("species" = "code")) %>% rename(sci_name = species.y)
+
+```
+
+```{r}
+ll.sp %>% select(filter_id, position, tier, species, common_name, lifeform, lifecycle) %>% paged_table()
+
+```
+
+Plot Veg Functional Type by Reach, Transect, Height-Tier
+bottom tier corresponds to 1, top tier is
+
+### MORP Reach 2
+```{r}
+ll.sp %>% filter(str_detect(filter_id, "MORP Reach 2")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+```
+
+### MORP Reach 3
+```{r}
+ll.sp%>% filter(str_detect(filter_id, "MORP Reach 3")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+```
+
+### MORP Reach 4
+```{r}
+ll.sp%>% filter(str_detect(filter_id, "MORP Reach 4")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+```
+
+### MORP Reach 5
+```{r}
+ll.sp%>% filter(str_detect(filter_id, "MORP Reach 5")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+```
+
+
+### MORP Reach 6
+```{r}
+ll.sp%>% filter(str_detect(filter_id, "MORP Reach 6")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+```
+
+
+### LORP 
+```{r}
+ll.sp%>% filter(str_detect(filter_id, "LORP")) %>% ggplot(aes(x = position, y = ord.tier, z = hits, color = lifeform))+
+  geom_point()+
+  facet_wrap(~filter_id, ncol=1)
+
+
+
+# ll.sp%>% filter(str_detect(filter_id, "LORP"))
+
+#presence of steph as subshrub adds category and changes color coding using the auto palette.
+```
+
+
+
+```{r, eval = FALSE, echo = FALSE}
+ll.sp %>% tabyl(ord.tier,species,filter_id,show_missing_levels = FALSE) %>%
+  adorn_totals("row") %>%
+  adorn_percentages("row") %>%
+  adorn_pct_formatting() %>%
+  adorn_ns() %>%
+  adorn_title("combined") %>% kable()
+```
+
+compute the possible hits for each transect
+
+```{r}
+tier.n.possible <- ll.sp %>% group_by(filter_id, ord.tier) %>% summarise(possible.hits = n())
+                                                                           
+
+tier.n.possible
+```
+
+```{r}
+tier.sp.hits <- ll.sp %>% group_by(filter_id, ord.tier, species, sci_name, common_name, lifeform, lifecycle, veg_type) %>% summarise(actual.hits = sum(hits)) %>% relocate(actual.hits)
+                                                                           
+
+tier.sp.hits
+```
+
+
+join the columns actual and possible hits
+
+```{r}
+tier.sp.cover <- tier.sp.hits %>% left_join(tier.n.possible, by = c('filter_id', 'ord.tier')) %>% mutate(tier.sp.cov = round(actual.hits/possible.hits * 100,digits = 2)) %>% relocate(where(is.numeric), .after = species) %>% relocate(ord.tier, .after = filter_id)
+
+tier.sp.cover
+```
+
+
+
+total cover at transect-tier
+```{r}
+tran.tier.cover <- tier.sp.cover %>% group_by(filter_id,ord.tier) %>% summarise(tier.tot.cov = sum(tier.sp.cov)) 
+
+tran.tier.cover %>% paged_table()
+```
+
+```{r}
+tran.tier.cover.wide <- tran.tier.cover %>% pivot_wider(names_from = ord.tier, values_from = tier.tot.cov, names_prefix = 'tier_')
+
+```
+
+```{r}
+# convert to wide format for map popup cover by transect tier
+
+```
+
+total cover at transect-tier-lifeform
+```{r}
+tier.sp.cover %>% group_by(filter_id,ord.tier,lifeform) %>% summarise(tier.lifeform.tot = sum(tier.sp.cov),species.n = n())
+
+```
+
+show bar plots cover by transect, tier, lifeform
+
+```{r}
+tier.sp.cover %>% filter(str_detect(filter_id, "LORP")) %>% group_by(filter_id,ord.tier,lifeform) %>% summarise(tier.lifeform.tot = sum(tier.sp.cov),species.n = n()) %>% ggplot(aes(x = tier.lifeform.tot , y = lifeform,color = lifeform, fill = lifeform))+
+  geom_col()+
+  facet_grid(ord.tier~filter_id)
+```
+
+## Tree Health
+
+summarise tree variables at the transect level. revisit for reach or other strata aggregations
+
+first split filter_id into separate columns
+
+```{r}
+bc <- belt.count %>% separate(col = filter_id, into = c("id", "last"), sep = "_", remove = 'FALSE') %>% separate(col = last, into = c('reach','strata.combined'), sep = 12) %>% separate(col = strata.combined, into = c('on.river','strata.combined'), sep = 2)
+
+bc %>% paged_table()
+```
+
+```{r}
+# filter(!is.na(potential_canopy_cover_percent)) %>%
+# to compute summaries, remove NAs
+pccp <- bc %>%  filter(!is.na(potential_canopy_cover_percent)) %>% group_by(filter_id) %>% summarise(mean_pccp = mean(potential_canopy_cover_percent),
+                                                 min_pccp = min(potential_canopy_cover_percent),
+                                                 max_ppcp = max(potential_canopy_cover_percent),
+                                                 n_ppcp = n()
+                                                 )
+# pccp <- bc %>%   group_by(filter_id) %>% summarise(mean_pccp = mean(potential_canopy_cover_percent),
+#                                                  min_pccp = min(potential_canopy_cover_percent),
+#                                                  max_ppcp = max(potential_canopy_cover_percent),
+#                                                  n_ppcp = n()
+#                                                  )
+paged_table(pccp)
+```
+
+```{r}
+bc %>% ggplot(aes(x = dbh_cm, y = tree_height_m, color = potential_canopy_cover_percent))+
+  geom_point()+
+  facet_wrap(~species)
+
+# species
+
+
+```
+
+## Canopy Cover by transect
+spherical densiometer
+summarise the 4
+
+```{r}
+# s.dens
+# sd_green_reading_out_of_96
+
+# mj mentions averaging by subtransects. revisit that later
+s.dens
+```
+
+average 4 spherical densiometer readings over 4 directions for each location on transect
+
+```{r}
+s_dens_sum <- s.dens %>% filter(!is.na(sd_green_reading_out_of_96)) %>% group_by(filter_id,location_m_on_transect_example) %>% summarise(mean_dens = mean(sd_green_reading_out_of_96),
+                                                 min_dens = min(sd_green_reading_out_of_96),
+                                                 max_dens = max(sd_green_reading_out_of_96),
+                                                 n_dens = n()
+                                                 )
+
+paged_table(s_dens_sum)
+
+```
+
+aggregating to transect level
+
+
+```{r}
+s_dens_sum_tran <-  s_dens_sum %>% group_by(filter_id) %>% summarise(mean_dens_tran = mean(mean_dens),
+                                                 min_dens_tran = min(min_dens),
+                                                 max_dens_tran = max(max_dens),
+                                                 n_dens_tran = n()
+                                                 )
+
+paged_table(s_dens_sum_tran)
+```
+
+
+
+## Age Size Structure
+
+### DBH by transect
+```{r}
+# dbh
+
+# tree height by species, transect, reach
+
+# proportion and location of trees in sapling size class (non-clonal)
+# proportion clonal individuals by  species and reach
+dbh_transect_mean <- bc %>% filter(!is.na(dbh_cm)) %>% group_by(filter_id) %>% summarise(mean_dbh_cm = mean(dbh_cm),
+                                                 min_dbh_cm = min(dbh_cm),
+                                                 max_dbh_cm = max(dbh_cm),
+                                                 n_dbh_cm = n()
+                                                 )
+
+paged_table(dbh_transect_mean)
+
+```
+
+### Tree Height by transect
+```{r}
+# dbh
+
+# tree height by species, transect, reach
+
+# proportion and location of trees in sapling size class (non-clonal)
+# proportion clonal individuals by  species and reach
+tree_height_m_transect_mean <- bc %>% filter(!is.na(tree_height_m)) %>% group_by(filter_id) %>% summarise(mean_height_m = mean(tree_height_m),
+                                                 min_tree_height_m = min(tree_height_m),
+                                                 max_tree_height_m = max(tree_height_m),
+                                                 n_tree_height_m = n()
+                                                 )
+
+paged_table(tree_height_m_transect_mean)
+
+```
+
+### Sapling Proportion at Transect 
+revisit for sapling proportion by species and reach level
+
+Tree size class	Criteria
+
+Seedling (S)	<1.37 m tall or < 2.5 cm dbh
+
+Pole (P)	≥ 1.37 m and 2.5–15 cm dbh
+
+Overstory tree (O)	> 15 cm and <50 cm dbh
+
+Legacy tree (L)	≥ 50 cm dbh
+
+It makes sense to calculate the proportion sapling by species; or at least excluding tara
+
+
+```{r}
+
+# Proportion and location of trees in sapling  size class (not clonal or suspected clonal, only seed-recruitment) by transect and reach
+
+# aggregate by reach x species
+
+# sapling non-clonal / total trees 
+# sapling clonal / total trees
+
+
+
+# clonal indicated by a Y
+
+# ZN  resolve this issue
+
+# really this is total stems measured - MJ may group multiple stems into a clonal or resprouted multistemmed morphology
+tot_tree_transect <- bc %>% filter(species != 'TARA') %>% group_by(filter_id) %>% summarise(tot.trees = n())
+
+# size class S for seedling
+# P for pole
+
+nonclonal.saplings <- bc %>% filter(species != 'TARA') %>% filter(size_class_main_trunk_see_table == 'S',is.na(clone_vegetative_reprod)) %>% group_by(filter_id) %>% summarise(nonclonal.saplings = n())
+# the != Y will return P for possible clonal and blank for not clonal. Added P
+
+# return definite clonal and possible clonal stems
+clonal.saplings <- bc %>% filter(species != 'TARA') %>% filter(size_class_main_trunk_see_table == 'S', clone_vegetative_reprod %in% c('Y','P'))%>% group_by(filter_id) %>% summarise(clonal.saplings = n())
+
+# unk.saplings <- bc %>% filter(size_class_main_trunk_see_table == 'S', is.na(clone_vegetative_reprod)) %>% group_by(filter_id) %>% summarise(unk.saplings = n())
+
+j <- tot_tree_transect %>% full_join(nonclonal.saplings)%>% full_join(clonal.saplings)
+# %>% full_join(unk.saplings)
+
+jj <-j %>%  replace_na(list(nonclonal.saplings = 0, clonal.saplings = 0))
+
+prop_sapling_tran <- jj %>% mutate(prop.nonclonal.saplings = nonclonal.saplings/tot.trees * 100,
+              prop.clonal.saplings = clonal.saplings/tot.trees * 100,
+              # prop.unk.saplings = unk.saplings/tot.trees * 100,
+              tot.saplings = nonclonal.saplings + clonal.saplings)
+
+```
+
+
+
+
+### Join Transect Level Summaries
+
+join all the various summaries at the transect level - one row of summary stats for each transect
+
+
+```{r}
+
+tran_rect <- s_dens_sum_tran  %>% full_join(pccp) %>% full_join(dbh_transect_mean) %>% full_join(tree_height_m_transect_mean) %>% full_join(prop_sapling_tran)%>% full_join(tran.tier.cover.wide) %>% separate(col = filter_id, into = c("id", "last"), sep = "_", remove = 'FALSE') %>% separate(col = last, into = c('reach','strata.combined'), sep = 12) %>% separate(col = strata.combined, into = c('on.river','strata.combined'), sep = 2) %>% 
+  mutate(on.river = case_when(on.river != 'on' ~ 'off river',
+                              on.river == 'on' ~ 'on river'),
+         fire = if_else(strata.combined == 'fire','fire','no fire'),
+         sub.reach.id = case_when(strata.combined == 'north'~'mr6.north',
+                                  strata.combined == 'south'~'mr6.south'))
+
+
+
+paged_table(tran_rect)
+
+```
+
+```{r}
+
+tran_rect %>% distinct(reach)
+# all summaries joined at transect level
+# tran_rect %>% write_csv('transect_summary.csv')
+
+
+
+
+
+```
+
+# Read GIS shapefiles
+
+```{r gis}
+# read polygons as simple features (sf) object
+transects <- st_read("data/transects.shp", quiet = TRUE)
+transects.obs <- st_read("data/transect_observations.shp", quiet = TRUE) %>% st_drop_geometry()
+# read the quantile levels for each parcel and the current year mean ndvi. This table computed below using the quantile functdion is read in here to display on the map below. 
+# t <- read_csv(paste0('data/table_quantile_',cYear,'.csv'))
+
+```
+
+
+
+```{r}
+str(transects)
+```
+
+```{r}
+str(transects.obs)
+```
+
+```{r}
+# transect.obs.joined <- transects %>% left_join(transects.obs, by = c('GlobalID'='guid')
+
+                     
+tran_rect$idn <- as.numeric(tran_rect$id)                          
+transect.obs.join <- transects %>% left_join(transects.obs, by = c('GlobalID'='guid')) %>% filter(!is.na(obs)|!is.na(date)) %>% left_join(tran_rect, by = c('IN_FID' = 'idn'))
+
+# IN_FID
+# id
+
+transect.obs.joined <- transect.obs.join %>% filter(!is.na(mean_dbh_cm))
+
+names(transect.obs.joined)
+```
+
+# Map
+```{r map}
+# show a dynamic map of the monitoring area
+tmap_mode("view")
+
+tm_basemap(leaflet::providers$Esri.WorldImagery) +
+  # all points
+   tm_shape(transect.obs.join) +
+  tm_dots(id = "group_id",popup.vars = c("group_id","date","obs","fluvial", "exotic_cov"),alpha =1, col = 'yellow')+
+  # just start points with data linked
+  tm_shape(transect.obs.joined) +
+  tm_dots(id = "group_id",popup.vars = c("group_id","filter_id","date","fluvial","fire","on.river","tier_1","tier_2","tier_3","exotic_cov","mean_dens_tran","mean_pccp","mean_height_m","mean_dbh_cm","prop.nonclonal.saplings","prop.clonal.saplings"  ),alpha =1, col = 'red')+
+  
+  # tm_shape()
+# tm_polygons(col =c("mean.ndvi"),title = "Mean NDVI 2020 (Jul 15 - Sep 5)",legend.hist=TRUE, breaks = c(0,.1,.2,.3,.4,.5,.6), palette = "Greens",title.col = "PCL",  id = "PCL",popup.vars = c("PCL","GB_TYPE.x","COMM_NAME.x","mean.ndvi", "20%", "above0.2"),alpha =.4)+
+# tm_layout(main.title = "Mean NDVI 2020(Jul 15 - Sep 15)",
+          # legend.title.size = 1,
+          # legend.text.size = 0.6,
+          # legend.bg.color = "white",
+          # legend.bg.alpha = 1
+          # )+
+  tm_view(legend.position = c("right","top"))
+
+# save the map as a stand alone html web map
+# tmap_save(filename = "typeD2020pilot.html")
+
+```
+
+red symbols have the transect level data in the popup window
+
+
